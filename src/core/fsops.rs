@@ -128,6 +128,8 @@ pub fn delete_items(paths: Vec<String>, idx: &Index) -> Result<(), String> {
 
 /// undo for delete: pull the newest matching entries back out of the Recycle Bin
 pub fn restore_items(paths: Vec<String>) -> Result<(), String> {
+    #[cfg(windows)]
+    {
     use trash::os_limited::{list, restore_all};
     let all = list().map_err(|e| e.to_string())?;
     let mut pick = Vec::new();
@@ -144,6 +146,12 @@ pub fn restore_items(paths: Vec<String>) -> Result<(), String> {
         return Err("Not in the Recycle Bin any more".into());
     }
     restore_all(pick).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = paths;
+        Err("Restore from Trash is not supported on macOS yet".into())
+    }
 }
 
 pub fn create_item(parent: String, name: String, dir: bool, idx: &Index) -> Result<String, String> {
