@@ -1,4 +1,4 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 mod config;
 mod core;
 mod ed;
@@ -410,7 +410,7 @@ fn runs_for(res: &resolve::Res) -> Vec<Run> {
     let mut out: Vec<Run> = Vec::new();
     let mut push = |out: &mut Vec<Run>, t: String, k: i32| { if let Some(l) = out.last_mut() { if l.kind == k { l.text = format!("{}{}", l.text, t).into(); return; } } out.push(Run { text: t.into(), kind: k }); };
     for (i, s) in sg.iter().enumerate() {
-        if i > 0 { push(&mut out, "\\".into(), 0); }
+        if i > 0 { push(&mut out, SEP.to_string(), 0); }
         match &info[i] {
             Info::None => push(&mut out, s.to_string(), 0),
             Info::Via => push(&mut out, s.to_string(), 3),
@@ -427,7 +427,7 @@ fn runs_for(res: &resolve::Res) -> Vec<Run> {
 fn note_for(s: &resolve::Step) -> String {
     let mut n = s.kind.clone();
     if s.jump { n += " · jumped from index"; } else if !s.note.is_empty() { n += &format!(" · {}", s.note); }
-    if !s.via.is_empty() { n += &format!(" · via {}", s.via.join("\\")); }
+    if !s.via.is_empty() { n += &format!(" · via {}", s.via.join(&SEP.to_string())); }
     if s.total > 0 && s.alts == 1 { n += &format!(" · only match of {}", s.total); } else if s.alts > 1 { n += &format!(" · best of {} matches", s.alts); }
     n
 }
@@ -608,6 +608,8 @@ fn close_tab(ui: &App, st: &mut State, i: usize) {
 // ---------------------------------------------------------------- startup
 
 fn already_running() -> bool {
+    #[cfg(windows)]
+    {
     use windows_sys::Win32::{Foundation::{GetLastError, ERROR_ALREADY_EXISTS}, System::Threading::CreateMutexW, UI::WindowsAndMessaging::*};
     let name: Vec<u16> = r"Local\hop-single-instance".encode_utf16().chain(Some(0)).collect();
     let title: Vec<u16> = "hop".encode_utf16().chain(Some(0)).collect();
@@ -618,12 +620,18 @@ fn already_running() -> bool {
         if !w.is_null() { if IsIconic(w) != 0 { ShowWindow(w, SW_RESTORE); } SetForegroundWindow(w); }
         true
     }
+    }
+    #[cfg(not(windows))]
+    { false }
 }
 
 fn main() {
     // a crash leaves its reason in %APPDATA%\hop\crash.txt (release builds abort, which would otherwise be silent)
     std::panic::set_hook(Box::new(|info| {
+        #[cfg(windows)]
         let dir = std::env::var("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir()).join("hop");
+        #[cfg(not(windows))]
+        let dir = dirs::config_dir().unwrap_or_else(std::env::temp_dir).join("hop");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), format!("{info}
 {}", std::backtrace::Backtrace::force_capture()));
@@ -733,6 +741,11 @@ fn main() {
     with(|ui, st| { go(ui, st, &start, Hist::None, None); });
 
     if let Some(script) = arg("--script") { testing::run(&ui, &script); }
-    { use slint::winit_030::WinitWindowAccessor; ui.show().unwrap(); ui.window().with_winit_window(|w| { use slint::winit_030::winit::platform::windows::WindowExtWindows; w.set_undecorated_shadow(true); }); }
+    {
+        use slint::winit_030::WinitWindowAccessor;
+        ui.show().unwrap();
+        #[cfg(windows)]
+        ui.window().with_winit_window(|w| { use slint::winit_030::winit::platform::windows::WindowExtWindows; w.set_undecorated_shadow(true); });
+    }
     ui.run().unwrap();
 }

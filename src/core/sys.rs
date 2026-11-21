@@ -18,8 +18,12 @@ fn s(p: Option<std::path::PathBuf>) -> Option<String> {
 }
 
 pub fn known() -> Known {
+    #[cfg(windows)]
+    let home_fallback = "C:\\".to_string();
+    #[cfg(not(windows))]
+    let home_fallback = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     Known {
-        home: s(dirs::home_dir()).unwrap_or_else(|| "C:\\".into()),
+        home: s(dirs::home_dir()).unwrap_or(home_fallback),
         desktop: s(dirs::desktop_dir()),
         documents: s(dirs::document_dir()),
         downloads: s(dirs::download_dir()),
@@ -43,6 +47,8 @@ fn wide(s: &str) -> Vec<u16> {
 }
 
 pub fn drives() -> Vec<Drive> {
+    #[cfg(windows)]
+    {
     use windows_sys::Win32::Storage::FileSystem::*;
     let mut out = Vec::new();
     let mask = unsafe { GetLogicalDrives() };
@@ -84,6 +90,26 @@ pub fn drives() -> Vec<Drive> {
         out.push(Drive { path, label, total, free: tfree, kind });
     }
     out
+    }
+
+    #[cfg(not(windows))]
+    {
+        let mut out = Vec::new();
+        #[cfg(target_os = "macos")]
+        let roots = ["/", "/Volumes"];
+        #[cfg(not(target_os = "macos"))]
+        let roots = ["/"];
+        for root in roots {
+            if let Ok(md) = std::fs::metadata(root) {
+                let mut total = md.len();
+                let mut free = 0;
+                let kind = if root == "/" { 3 } else { 2 };
+                out.push(Drive { path: root.into(), label: if root == "/" { "Macintosh HD".into() } else { "Volumes".into() }, total, free, kind });
+                if root == "/" { break; }
+            }
+        }
+        out
+    }
 }
 
 /// `hop.exe C:\some\folder` opens there

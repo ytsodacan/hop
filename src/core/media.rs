@@ -1,7 +1,6 @@
 //! Previews and file facts: shell thumbnails and icons, file details, checksums, folder sizes.
 use std::fs;
 use std::io::Read;
-use std::os::windows::fs::MetadataExt;
 use std::path::Path;
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -20,13 +19,59 @@ pub struct Rgba {
 }
 
 pub fn thumb(path: &str, size: u32) -> Option<Rgba> {
+    #[cfg(windows)]
+    {
     // Own thread per request: COM is initialised per thread, and the shared worker threads must stay free of it.
     let px = size.clamp(16, 1024) as i32;
     let path = path.to_string();
     std::thread::spawn(move || shell_image(&path, px)).join().ok()?
+    }
+    #[cfg(not(windows))]
+    {
+        let px = size.clamp(16, 1024);
+        let ext = Path::new(path).extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext == "png" {
+            if let Ok(mut decoder) = png::Decoder::new(std::io::BufReader::new(std::fs::File::open(path).ok()?)).read_info() {
+                let (w, h, color) = {
+                    let info = decoder.info();
+                    (info.width, info.height, info.color_type)
+                };
+                let mut buf = vec![0u8; decoder.output_buffer_size().unwrap_or((w*h*4) as usize)];
+                let n = decoder.next_frame(&mut buf).ok()?.buffer_size();
+                buf.truncate(n);
+                let mut data = match color {
+                    png::ColorType::Rgb => { let mut rgba = Vec::with_capacity((w*h*4) as usize); for p in buf.chunks_exact(3) { rgba.extend_from_slice(&[p[0],p[1],p[2],255]); } rgba },
+                    png::ColorType::Rgba => buf,
+                    _ => return None,
+                };
+                if w != px || h != px {
+                    data = nearest_resize(&data, w, h, px, px);
+                }
+                return Some(Rgba { w: px, h: px, data });
+            }
+        }
+        None
+    }
 }
 
+#[cfg(not(windows))]
+fn nearest_resize(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32) -> Vec<u8> {
+    let mut out = vec![0u8; (dw * dh * 4) as usize];
+    for y in 0..dh {
+        let sy = ((y as u64 * sh as u64) / dh as u64).min(sh as u64 - 1) as u32;
+        for x in 0..dw {
+            let sx = ((x as u64 * sw as u64) / dw as u64).min(sw as u64 - 1) as u32;
+            let si = ((sy * sw + sx) * 4) as usize;
+            let di = ((y * dw + x) * 4) as usize;
+            out[di..di+4].copy_from_slice(&src[si..si+4]);
+        }
+    }
+    out
+}
+
+#[cfg(windows)]
 struct ComGuard(bool);
+#[cfg(windows)]
 impl Drop for ComGuard {
     fn drop(&mut self) {
         if self.0 {
@@ -35,6 +80,7 @@ impl Drop for ComGuard {
     }
 }
 
+#[cfg(windows)]
 fn shell_image(path: &str, px: i32) -> Option<Rgba> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::SIZE;
@@ -105,8 +151,14 @@ pub struct Info {
 
 pub fn file_info(path: String) -> Result<Info, String> {
     let md = fs::metadata(&path).map_err(|e| e.to_string())?;
-    let a = md.file_attributes();
-    let is_dir = a & 0x10 != 0;
+    #[cfg(windows)]
+    let (is_dir, readonly, hidden) = {
+        use std::os::windows::fs::MetadataExt;
+        let a = md.file_attributes();
+        (a & 0x10 != 0, md.permissions().readonly(), a & 0x2 != 0)
+    };
+    #[cfg(not(windows))]
+    let (is_dir, readonly, hidden) = (md.is_dir(), md.permissions().readonly(), Path::new(&path).file_name().and_then(|n| n.to_str()).map(|n| n.starts_with('.')).unwrap_or(false));
     let image = if is_dir { None } else { imagesize::size(&path).ok().map(|s| ImageDims { w: s.width, h: s.height }) };
     let text = if is_dir || image.is_some() || md.len() > 2 * 1048576 { None } else { text_stats(&path) };
     Ok(Info {
@@ -114,8 +166,8 @@ pub fn file_info(path: String) -> Result<Info, String> {
         created: ms(md.created()),
         modified: ms(md.modified()),
         accessed: ms(md.accessed()),
-        readonly: md.permissions().readonly(),
-        hidden: a & 0x2 != 0,
+        readonly,
+        hidden,
         image,
         text,
     })
@@ -165,7 +217,7 @@ pub struct Sizes {
 /// "at least this much" instead of making you wait. Junctions and symlinks are not followed.
 pub fn folder_size(path: String, budget_ms: Option<u64>) -> Result<Sizes, String> {
     let md = fs::metadata(&path).map_err(|e| e.to_string())?;
-    if md.file_attributes() & 0x10 == 0 {
+    if md.is_file() {
         return Ok(Sizes { size: md.len(), files: 1, dirs: 0, complete: true });
     }
     let deadline = budget_ms.map(|b| Instant::now() + Duration::from_millis(b));
@@ -184,12 +236,16 @@ pub fn folder_size(path: String, budget_ms: Option<u64>) -> Result<Sizes, String
                 }
             }
             let Ok(m) = e.metadata() else { continue };
-            let a = m.file_attributes();
-            if a & 0x10 != 0 {
-                if a & 0x400 == 0 {
-                    dirs += 1;
-                    stack.push(e.path());
-                }
+            #[cfg(windows)]
+            let follow = {
+                use std::os::windows::fs::MetadataExt;
+                let a = m.file_attributes();
+                (a & 0x10 != 0, a & 0x400 == 0)
+            };
+            #[cfg(not(windows))]
+            let follow = (m.is_dir(), !m.file_type().is_symlink());
+            if follow.0 {
+                if follow.1 { dirs += 1; stack.push(e.path()); }
             } else {
                 files += 1;
                 size += m.len();

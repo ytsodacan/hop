@@ -2,8 +2,8 @@
 
 # hop.
 
-A file explorer for Windows you can type at. Press `/` or `Ctrl+L` and write fragments:
-`ap at 263` opens `AppData\Roaming\ATLauncher\instances\Minecraft263withFabric`.
+A file explorer for Windows and macOS you can type at. Press `/` or `Ctrl+L` and write fragments:
+`ap at 263` opens `AppData\Roaming\ATLauncher\instances\Minecraft263withFabric` on Windows.
 
 Native Rust + [Slint](https://slint.dev), software-rendered: no webview, no GPU driver, about **45–60 MB of RAM** and
 0% CPU when idle.
@@ -31,17 +31,24 @@ Native Rust + [Slint](https://slint.dev), software-rendered: no webview, no GPU 
 
 ## Install
 
-Grab `hop-windows-x64.exe` from the [releases](../../releases) page and run it. There is no installer and no
-dependency. Settings live in `%APPDATA%\hop\config.json`.
+Grab `hop-windows-x64.exe` or `hop-macos-{arm64,x64}.tar.gz` from the [releases](../../releases) page.
+Settings live in `%APPDATA%\hop\config.json` on Windows and `~/Library/Application Support/hop/config.json` on macOS.
 
 ## Build
 
-You need a recent stable Rust toolchain and the MSVC build tools (Visual Studio Build Tools, "Desktop development with
-C++").
+You need a recent stable Rust toolchain. On Windows, install the MSVC build tools (Visual Studio Build Tools,
+"Desktop development with C++"). On macOS, install Xcode command-line tools.
 
 ```powershell
 cargo run --release              # build and run
 cargo test                       # language tables and language detection
+```
+
+macOS:
+
+```sh
+cargo run --release
+cargo test --locked
 ```
 
 To make a release exe with **no machine-specific paths** in it (Rust otherwise embeds your user name and project folder
@@ -91,7 +98,6 @@ ui/              Slint files: theme.slint, parts.slint, app.slint
 - [ ] File star map: a treemap of what is taking up space, click to drill in
 - [ ] Make the Slint version look more like the original webview version
 - [ ] Get RAM use under 30 MB while using the app (about 45-60 MB now)
-- [ ] Add Linux and mac support.
 - [ ] Build an installer.
 
 ## Adding a language
