@@ -21,6 +21,16 @@ pub fn join(p: &str, n: &str) -> String {
 pub fn eq(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b) || a.to_lowercase() == b.to_lowercase()
 }
+pub fn drive_prefix(p: &str) -> String {
+    #[cfg(windows)]
+    {
+        p.get(..2).unwrap_or(p).to_string()
+    }
+    #[cfg(not(windows))]
+    {
+        p.to_string()
+    }
+}
 pub fn short_path(p: &str, home: &str) -> String {
     if p.len() > home.len() && p.to_lowercase().starts_with(&home.to_lowercase()) { format!("~{}", &p[home.len()..]) } else { p.to_string() }
 }
@@ -56,4 +66,15 @@ pub fn fmt_date(ms: i64) -> String {
 
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drive_prefix_is_safe_for_short_paths() {
+        assert!(!drive_prefix("/").is_empty());
+        assert_eq!(drive_prefix("/"), "/");
+    }
 }

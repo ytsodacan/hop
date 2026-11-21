@@ -232,8 +232,9 @@ pub fn push_chrome(ui: &App, st: &mut State) {
     rows.push(hdr("Drives", "")); y += 34.0;
     for d in &st.drives {
         let used = d.total.saturating_sub(d.free);
-        let active = st.cwd.len() >= 2 && st.cwd[..2].eq_ignore_ascii_case(&d.path[..2]);
-        rows.push(SideRow { label: format!("{}{}", &d.path[..2], if d.label.is_empty() { String::new() } else { format!(" {}", d.label) }).into(), sub: format!("{} free", fmt_size(d.free)).into(), path: d.path.as_str().into(), kind: 3, active, meter: if d.total > 0 { used as f32 / d.total as f32 } else { 0.0 } });
+        let prefix = drive_prefix(&d.path);
+        let active = st.cwd.to_lowercase().starts_with(&d.path.to_lowercase());
+        rows.push(SideRow { label: format!("{}{}", prefix, if d.label.is_empty() { String::new() } else { format!(" {}", d.label) }).into(), sub: format!("{} free", fmt_size(d.free)).into(), path: d.path.as_str().into(), kind: 3, active, meter: if d.total > 0 { used as f32 / d.total as f32 } else { 0.0 } });
         y += 46.0;
     }
     ui.set_aliases_open(st.cfg.opts.aliases_open);
