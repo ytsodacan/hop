@@ -1,13 +1,48 @@
-name: ci
-on: [push, pull_request]
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
 jobs:
   build:
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        include:
+          - os: windows-latest
+            artifact: hop-windows.zip
+          - os: macos-latest
+            artifact: hop-macos.tar.gz
+          - os: ubuntu-latest
+            artifact: hop-linux.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --locked
-      - run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --locked
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package macOS
+        if: runner.os == 'macOS'
+        run: tar -C target/release -czf hop-macos.tar.gz hop
+
+      - name: Package Linux
+        if: runner.os == 'Linux'
+        run: tar -C target/release -czf hop-linux.tar.gz hop
+
+      - name: Package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/release/hop.exe -DestinationPath hop-windows.zip -Force
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
