@@ -398,8 +398,14 @@ pub fn changed(ui: &App, st: &mut State) {
     push(ui, st);
 }
 
+#[cfg(windows)]
 fn clip_get() -> String { clipboard_win::get_clipboard_string().unwrap_or_default() }
+#[cfg(windows)]
 fn clip_set(s: &str) { let _ = clipboard_win::set_clipboard_string(s); }
+#[cfg(not(windows))]
+fn clip_get() -> String { arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok()).unwrap_or_default() }
+#[cfg(not(windows))]
+fn clip_set(s: &str) { if let Ok(mut c) = arboard::Clipboard::new() { let _ = c.set_text(s); } }
 
 pub fn save(ui: &App, st: &mut State) {
     let t = st.tab;

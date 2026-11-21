@@ -5,7 +5,7 @@ on:
 permissions:
   contents: write
 jobs:
-  release:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,3 +22,16 @@ jobs:
           files: |
             hop-windows-x64.exe
             hop-windows-x64.exe.sha256
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          tar -C target/release -czf hop-macos-arm64.tar.gz hop
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: hop-macos-arm64.tar.gz

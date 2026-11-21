@@ -1,7 +1,6 @@
 //! Everything that touches files. Every command is `async` so it runs off the UI thread.
 use super::index::Index;
 use std::fs;
-use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 pub struct FileEntry {
@@ -13,18 +12,25 @@ pub struct FileEntry {
 }
 
 fn entry(name: String, md: &fs::Metadata) -> FileEntry {
-    let a = md.file_attributes();
+    #[cfg(windows)]
+    let (is_dir, hidden) = {
+        use std::os::windows::fs::MetadataExt;
+        let a = md.file_attributes();
+        (a & 0x10 != 0, a & 0x6 != 0)
+    };
+    #[cfg(not(windows))]
+    let (is_dir, hidden) = (md.is_dir(), name.starts_with('.'));
     FileEntry {
         name,
-        dir: a & 0x10 != 0,
-        size: if a & 0x10 != 0 { 0 } else { md.len() },
+        dir: is_dir,
+        size: if is_dir { 0 } else { md.len() },
         mtime: md
             .modified()
             .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0),
-        hidden: a & 0x6 != 0, // hidden | system
+        hidden,
     }
 }
 
@@ -38,7 +44,11 @@ fn err(e: std::io::Error) -> String {
 }
 
 fn bad_name(n: &str) -> bool {
-    n.is_empty() || n.ends_with('.') || n.ends_with(' ') || n.chars().any(|c| "\\/:*?\"<>|".contains(c) || c.is_control())
+    #[cfg(windows)]
+    let bad = "\\/:*?\"<>|";
+    #[cfg(not(windows))]
+    let bad = "/";
+    n.is_empty() || (cfg!(windows) && (n.ends_with('.') || n.ends_with(' '))) || n.chars().any(|c| bad.contains(c) || c.is_control())
 }
 
 pub fn list_dir(path: String, idx: &Index) -> Result<Vec<FileEntry>, String> {
@@ -64,7 +74,7 @@ pub fn stat(path: String) -> Option<FileEntry> {
     let name = p
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.trim_end_matches('\\').to_string());
+        .unwrap_or_else(|| path.trim_end_matches(|c| c == '\\' || c == '/').to_string());
     Some(entry(name, &md))
 }
 
@@ -176,9 +186,11 @@ fn unique(dir: &Path, name: &str, suffix: Option<&str>) -> PathBuf {
 
 fn copy_rec(from: &Path, to: &Path) -> std::io::Result<()> {
     let md = fs::symlink_metadata(from)?;
-    if md.file_attributes() & 0x10 != 0 {
-        if md.file_attributes() & 0x400 != 0 {
-            return Ok(()); // don't follow junctions
+    if md.is_dir() {
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt;
+            if md.file_attributes() & 0x400 != 0 { return Ok(()); }
         }
         fs::create_dir(to)?;
         for e in fs::read_dir(from)? {
@@ -243,12 +255,23 @@ pub fn open_path(path: String) -> Result<(), String> {
 }
 
 pub fn reveal(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
     use std::os::windows::process::CommandExt;
     std::process::Command::new("explorer.exe")
         .raw_arg(format!("/select,\"{}\"", path))
         .spawn()
         .map(|_| ())
         .map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg("-R").arg(&path).spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        opener::open(std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(&path))).map_err(|e| e.to_string())
+    }
 }
 
 pub struct Peek {

@@ -41,7 +41,10 @@ pub struct Config {
 }
 
 fn file() -> std::path::PathBuf {
+    #[cfg(windows)]
     let base = std::env::var("APPDATA").map(std::path::PathBuf::from).unwrap_or_else(|_| std::env::temp_dir());
+    #[cfg(not(windows))]
+    let base = dirs::config_dir().unwrap_or_else(std::env::temp_dir);
     base.join("hop").join("config.json")
 }
 
@@ -51,6 +54,8 @@ impl Config {
         let fresh = c.aliases.is_empty() && c.pins.is_empty();
         if fresh {
             // first run: aliases and pins come from this machine's real folders (only ones that exist)
+            #[cfg(windows)]
+            {
             let var = |n: &str| k.env.get(n).cloned();
             let roam = var("appdata").unwrap_or_else(|| join(&k.home, "AppData\\Roaming"));
             let local = var("localappdata").unwrap_or_else(|| join(&k.home, "AppData\\Local"));
@@ -65,6 +70,17 @@ impl Config {
             ];
             c.aliases = defs.into_iter().filter_map(|(n, p)| p.filter(|p| std::path::Path::new(p).is_dir()).map(|p| Alias { name: n.into(), path: p })).collect();
             c.pins = [&k.documents, &k.downloads, &k.desktop, &k.pictures].iter().filter_map(|p| (*p).clone()).chain(std::iter::once("C:\\dev".to_string())).filter(|p| std::path::Path::new(p).is_dir()).collect();
+            }
+            #[cfg(not(windows))]
+            {
+                let defs: Vec<(&str, Option<String>)> = vec![
+                    ("desktop", k.desktop.clone()), ("docs", k.documents.clone()), ("dl", k.downloads.clone()),
+                    ("pics", k.pictures.clone()), ("music", k.music.clone()), ("vids", k.videos.clone()),
+                    ("home", Some(k.home.clone())),
+                ];
+                c.aliases = defs.into_iter().filter_map(|(n,p)| p.filter(|p| std::path::Path::new(p).is_dir()).map(|p| Alias{name:n.into(), path:p})).collect();
+                c.pins = [&k.documents,&k.downloads,&k.desktop,&k.pictures].iter().filter_map(|p| (*p).clone()).filter(|p| std::path::Path::new(p).is_dir()).collect();
+            }
         }
         c
     }

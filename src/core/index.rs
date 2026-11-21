@@ -49,7 +49,7 @@ pub fn norm_name(name: &str) -> (String, Vec<u8>) {
 }
 
 fn depth_of(path: &str) -> u8 {
-    path.split('\\').filter(|s| !s.is_empty()).count().min(255) as u8
+    path.split(|c| c == '\\' || c == '/').filter(|s| !s.is_empty()).count().min(255) as u8
 }
 
 fn make(path: String, name: String) -> Item {
@@ -60,7 +60,7 @@ fn make(path: String, name: String) -> Item {
 
 impl Index {
     pub fn add(&self, path: &str) {
-        let name = path.trim_end_matches('\\').rsplit('\\').next().unwrap_or(path).to_string();
+            let name = path.trim_end_matches(|c| c == '\\' || c == '/').rsplit(|c| c == '\\' || c == '/').next().unwrap_or(path).to_string();
         let key = path.to_lowercase();
         let mut g = self.0.lock().unwrap();
         if g.items.len() >= CAP || !g.seen.insert(key) {
@@ -81,8 +81,8 @@ impl Index {
     }
     /// forget a folder and everything under it
     pub fn remove_prefix(&self, path: &str) {
-        let p = path.trim_end_matches('\\').to_lowercase();
-        let pre = format!("{}\\", p);
+        let p = path.trim_end_matches(|c| c == '\\' || c == '/').to_lowercase();
+        let pre = format!("{p}{}", std::path::MAIN_SEPARATOR);
         let mut g = self.0.lock().unwrap();
         let Inner { items, seen, .. } = &mut *g;
         items.retain(|i| {
@@ -142,14 +142,14 @@ pub fn lookup(idx: &Index, token: &str, under: Option<String>, max_depth: Option
         return vec![];
     }
     let limit = limit.unwrap_or(40);
-    let under = under.map(|u| u.trim_end_matches('\\').to_string());
+    let under = under.map(|u| u.trim_end_matches(|c| c == '\\' || c == '/').to_string());
     let ud = under.as_deref().map(depth_of).unwrap_or(0);
     let g = idx.0.lock().unwrap();
     let mut hits: Vec<(i32, &Item)> = Vec::new();
     for it in g.items.iter() {
         if let Some(u) = &under {
             let (p, ub) = (it.path.as_bytes(), u.as_bytes());
-            if p.len() <= ub.len() + 1 || p[ub.len()] != b'\\' || !p[..ub.len()].eq_ignore_ascii_case(ub) {
+            if p.len() <= ub.len() + 1 || !matches!(p[ub.len()], b'\\' | b'/') || !p[..ub.len()].eq_ignore_ascii_case(ub) {
                 continue;
             }
             if it.depth.saturating_sub(ud) > max_depth.unwrap_or(4) {
@@ -167,7 +167,7 @@ pub fn lookup(idx: &Index, token: &str, under: Option<String>, max_depth: Option
             let via = match &under {
                 Some(u) => {
                     let rel = &it.path[u.len() + 1..];
-                    let mut parts: Vec<&str> = rel.split('\\').collect();
+                    let mut parts: Vec<&str> = rel.split(|c| c == '\\' || c == '/').collect();
                     parts.pop();
                     parts.into_iter().map(String::from).collect()
                 }
@@ -192,7 +192,12 @@ const SKIP: &[&str] = &[
 ];
 
 fn skip_path(lower: &str, name: &str) -> bool {
-    SKIP.contains(&name) || lower.contains("\\appdata\\local\\temp") || lower.contains("\\appdata\\local\\packages") || lower.contains("\\.cargo\\registry")
+    SKIP.contains(&name)
+        || lower.contains("\\appdata\\local\\temp")
+        || lower.contains("/library/caches")
+        || lower.contains("/.cache")
+        || lower.contains("/node_modules/")
+        || lower.contains("/.cargo/registry")
 }
 
 fn walk(root: &Path, max_depth: u32, skip_dir: Option<&str>, idx: &Index, skip_windows_root: bool) {
@@ -202,9 +207,15 @@ fn walk(root: &Path, max_depth: u32, skip_dir: Option<&str>, idx: &Index, skip_w
         let Ok(rd) = std::fs::read_dir(&dir) else { continue };
         for e in rd.flatten() {
             let Ok(md) = e.metadata() else { continue };
+            #[cfg(windows)]
+            let (is_dir, is_junction) = {
             use std::os::windows::fs::MetadataExt;
             let a = md.file_attributes();
-            if a & 0x10 == 0 || a & 0x400 != 0 {
+            (a & 0x10 != 0, a & 0x400 != 0)
+            };
+            #[cfg(not(windows))]
+            let (is_dir, is_junction) = (md.is_dir(), md.file_type().is_symlink());
+            if !is_dir || is_junction {
                 continue; // not a folder, or a junction / symlink (avoid loops)
             }
             let name = e.file_name().to_string_lossy().into_owned();
@@ -234,6 +245,7 @@ fn walk(root: &Path, max_depth: u32, skip_dir: Option<&str>, idx: &Index, skip_w
 pub fn spawn_scan(idx: Index, done: impl FnOnce(usize) + Send + 'static) {
     let _ = std::thread::Builder::new().name("indexer".into()).spawn(move || {
         // background mode: low CPU *and* low disk priority, so browsing never waits on us
+        #[cfg(windows)]
         unsafe {
             use windows_sys::Win32::System::Threading::*;
             SetThreadPriority(GetCurrentThread(), THREAD_MODE_BACKGROUND_BEGIN);
@@ -244,12 +256,15 @@ pub fn spawn_scan(idx: Index, done: impl FnOnce(usize) + Send + 'static) {
             walk(h, 9, None, &idx, false);
         }
         let home_l = home.as_ref().map(|h| h.to_string_lossy().to_lowercase());
+        #[cfg(windows)]
         for i in 0..26u8 {
             let root = PathBuf::from(format!("{}:\\", (b'A' + i) as char));
-            if root.is_dir() {
-                idx.add(&root.to_string_lossy());
-                walk(&root, 4, home_l.as_deref(), &idx, true);
-            }
+            if root.is_dir() { idx.add(&root.to_string_lossy()); walk(&root, 4, home_l.as_deref(), &idx, true); }
+        }
+        #[cfg(not(windows))]
+        {
+            let root = if cfg!(target_os = "macos") { PathBuf::from("/") } else { PathBuf::from("/") };
+            idx.add(&root.to_string_lossy());
         }
         let count = {
             let mut g = idx.0.lock().unwrap();

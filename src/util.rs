@@ -1,19 +1,18 @@
-//! Path and formatting helpers (Windows paths: backslashes, drive roots like `C:\`).
-pub const SEP: char = '\\';
+//! Path and formatting helpers.
+pub const SEP: char = std::path::MAIN_SEPARATOR;
 
 pub fn segs(p: &str) -> Vec<&str> {
-    p.split(SEP).filter(|s| !s.is_empty()).collect()
+    p.split(|c| c == '\\' || c == '/').filter(|s| !s.is_empty()).collect()
 }
 pub fn leaf(p: &str) -> &str {
-    let q = p.trim_end_matches(SEP);
-    q.rsplit(SEP).next().unwrap_or(q)
+    let q = p.trim_end_matches(|c| c == '\\' || c == '/');
+    q.rsplit(|c| c == '\\' || c == '/').next().unwrap_or(q)
 }
 pub fn parent(p: &str) -> Option<String> {
-    let q = p.trim_end_matches(SEP);
-    let i = q.rfind(SEP)?;
-    if i == 2 && q.as_bytes()[1] == b':' {
-        return Some(q[..3].to_string());
-    }
+    let q = p.trim_end_matches(|c| c == '\\' || c == '/');
+    let i = q.rfind(|c| c == '\\' || c == '/')?;
+    if i == 0 { return Some(SEP.to_string()); }
+    if i == 2 && q.as_bytes().get(1) == Some(&b':') { return Some(q[..3].to_string()); }
     Some(q[..i].to_string())
 }
 pub fn join(p: &str, n: &str) -> String {
